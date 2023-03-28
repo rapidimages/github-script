@@ -7,9 +7,8 @@
 This action makes it easy to quickly write a script in your workflow that
 uses the GitHub API and the workflow run context.
 
-In order to use this action, a `script` input is provided. The value of that
-input should be the body of an asynchronous function call. The following
-arguments will be provided:
+To use this action, provide an input named `script` that contains the body of an asynchronous function call.
+The following arguments will be provided:
 
 - `github` A pre-authenticated
   [octokit/rest.js](https://octokit.github.io/rest.js) client with pagination plugins
@@ -19,6 +18,7 @@ arguments will be provided:
 - `glob` A reference to the [@actions/glob](https://github.com/actions/toolkit/tree/main/packages/glob) package
 - `io` A reference to the [@actions/io](https://github.com/actions/toolkit/tree/main/packages/io) package
 - `exec` A reference to the [@actions/exec](https://github.com/actions/toolkit/tree/main/packages/exec) package
+- `fetch` A reference to the [node-fetch](https://github.com/node-fetch/node-fetch) package
 - `require` A proxy wrapper around the normal Node.js `require` to enable
   requiring relative paths (relative to the current working directory) and
   requiring npm packages installed in the current working directory. If for
@@ -27,13 +27,26 @@ arguments will be provided:
   our wrapping applied.
 
 Since the `script` is just a function body, these values will already be
-defined, so you don't have to (see examples below).
+defined, so you don't have to import them (see examples below).
 
 See [octokit/rest.js](https://octokit.github.io/rest.js/) for the API client
 documentation.
 
-**Note** This action is still a bit of an experiment—the API may change in
-future versions. 🙂
+## Breaking Changes
+
+### Breaking changes in V6
+
+Version 6 of this action updated the runtime to Node 16 - https://docs.github.com/en/actions/creating-actions/metadata-syntax-for-github-actions#example-using-nodejs-v16
+
+All scripts are now run with Node 16 instead of Node 12 and are affected by any breaking changes between Node 12 and 16.
+
+### Breaking changes in V5
+
+Version 5 of this action includes the version 5 of `@actions/github` and `@octokit/plugin-rest-endpoint-methods`. As part of this update, the Octokit context available via `github` no longer has REST methods directly. These methods are available via `github.rest.*` - https://github.com/octokit/plugin-rest-endpoint-methods.js/releases/tag/v5.0.0
+
+For example, `github.issues.createComment` in V4 becomes `github.rest.issues.createComment` in V5
+
+`github.request`, `github.paginate`, and `github.graphql` are unchanged.
 
 ## Development
 
@@ -45,7 +58,7 @@ The return value of the script will be in the step's outputs under the
 "result" key.
 
 ```yaml
-- uses: actions/github-script@v4
+- uses: actions/github-script@v6
   id: set-result
   with:
     script: return "Hello!"
@@ -64,12 +77,53 @@ output of a github-script step. For some workflows, string encoding is preferred
 `result-encoding` input:
 
 ```yaml
-- uses: actions/github-script@v4
+- uses: actions/github-script@v6
   id: my-script
   with:
     result-encoding: string
     script: return "I will be string (not JSON) encoded!"
 ```
+
+## Retries
+
+By default, requests made with the `github` instance will not be retried. You can configure this with the `retries` option:
+
+```yaml
+- uses: actions/github-script@v6
+  id: my-script
+  with:
+    result-encoding: string
+    retries: 3
+    script: |
+      github.rest.issues.get({
+        issue_number: context.issue.number,
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+      })
+```
+
+In this example, request failures from `github.rest.issues.get()` will be retried up to 3 times.
+
+You can also configure which status codes should be exempt from retries via the `retry-exempt-status-codes` option:
+
+```yaml
+- uses: actions/github-script@v6
+  id: my-script
+  with:
+    result-encoding: string
+    retries: 3
+    retry-exempt-status-codes: 400,401
+    script: |
+      github.rest.issues.get({
+        issue_number: context.issue.number,
+        owner: context.repo.owner,
+        repo: context.repo.repo,
+      })
+```
+
+By default, the following status codes will not be retried: `400, 401, 403, 404, 422` [(source)](https://github.com/octokit/plugin-retry.js/blob/9a2443746c350b3beedec35cf26e197ea318a261/src/index.ts#L14).
+
+These retries are implemented using the [octokit/plugin-retry.js](https://github.com/octokit/plugin-retry.js) plugin. The retries use [exponential backoff](https://en.wikipedia.org/wiki/Exponential_backoff) to space out retries. ([source](https://github.com/octokit/plugin-retry.js/blob/9a2443746c350b3beedec35cf26e197ea318a261/src/error-request.ts#L13))
 
 ## Examples
 
@@ -82,7 +136,7 @@ By default, github-script will use the token provided to your workflow.
 
 ```yaml
 - name: View context attributes
-  uses: actions/github-script@v4
+  uses: actions/github-script@v6
   with:
     script: console.log(context)
 ```
@@ -98,10 +152,10 @@ jobs:
   comment:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v4
+      - uses: actions/github-script@v6
         with:
           script: |
-            github.issues.createComment({
+            github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -120,10 +174,10 @@ jobs:
   apply-label:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v4
+      - uses: actions/github-script@v6
         with:
           script: |
-            github.issues.addLabels({
+            github.rest.issues.addLabels({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -133,20 +187,22 @@ jobs:
 
 ### Welcome a first-time contributor
 
+You can format text in comments using the same [Markdown syntax](https://docs.github.com/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax) as the GitHub web interface:
+
 ```yaml
-on: pull_request
+on: pull_request_target
 
 jobs:
   welcome:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v4
+      - uses: actions/github-script@v6
         with:
           script: |
             // Get a list of all issues created by the PR opener
             // See: https://octokit.github.io/rest.js/#pagination
             const creator = context.payload.sender.login
-            const opts = github.issues.listForRepo.endpoint.merge({
+            const opts = github.rest.issues.listForRepo.endpoint.merge({
               ...context.issue,
               creator,
               state: 'all'
@@ -163,11 +219,13 @@ jobs:
               }
             }
 
-            await github.issues.createComment({
+            await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: 'Welcome, new contributor!'
+              body: `**Welcome**, new contributor!
+
+                Please make sure you're read our [contributing guide](CONTRIBUTING.md) and we look forward to reviewing your Pull request shortly ✨`
             })
 ```
 
@@ -183,7 +241,7 @@ jobs:
   diff:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v4
+      - uses: actions/github-script@v6
         with:
           script: |
             const diff_url = context.payload.pull_request.diff_url
@@ -207,7 +265,7 @@ jobs:
   list-issues:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v4
+      - uses: actions/github-script@v6
         with:
           script: |
             const query = `query($owner:String!, $name:String!, $label:String!) {
@@ -240,8 +298,8 @@ jobs:
   echo-input:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/github-script@v4
+      - uses: actions/checkout@v3
+      - uses: actions/github-script@v6
         with:
           script: |
             const script = require('./path/to/script.js')
@@ -278,8 +336,8 @@ jobs:
   echo-input:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/github-script@v4
+      - uses: actions/checkout@v3
+      - uses: actions/github-script@v6
         env:
           SHA: '${{env.parentSHA}}'
         with:
@@ -293,7 +351,7 @@ And then export an async function from your module:
 ```javascript
 module.exports = async ({github, context, core}) => {
   const {SHA} = process.env
-  const commit = await github.repos.getCommit({
+  const commit = await github.rest.repos.getCommit({
     owner: context.repo.owner,
     repo: context.repo.repo,
     ref: `${SHA}`
@@ -304,7 +362,10 @@ module.exports = async ({github, context, core}) => {
 
 ### Use npm packages
 
-Like importing your own files above, you can also use installed modules:
+Like importing your own files above, you can also use installed modules.
+Note that this is achieved with a wrapper on top `require`, so if you're
+trying to require a module inside your own file, you might need to import
+it externally or pass the `require` wrapper to your file:
 
 ```yaml
 on: push
@@ -313,14 +374,14 @@ jobs:
   echo-input:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
         with:
-          node-version: 14
+          node-version: 16
       - run: npm ci
       # or one-off:
       - run: npm install execa
-      - uses: actions/github-script@v4
+      - uses: actions/github-script@v6
         with:
           script: |
             const execa = require('execa')
@@ -328,6 +389,34 @@ jobs:
             const { stdout } = await execa('echo', ['hello', 'world'])
 
             console.log(stdout)
+```
+
+### Use ESM `import`
+
+To import an ESM file, you'll need to reference your script by an absolute path and ensure you have a `package.json` file with `"type": "module"` specified.
+
+For a script in your repository `src/print-stuff.js`:
+
+```js
+export default function printStuff() {
+  console.log('stuff')
+}
+```
+
+```yaml
+on: push
+
+jobs:
+  print-stuff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/github-script@v6
+        with:
+          script: |
+            const { default: printStuff } = await import('${{ github.workspace }}/src/print-stuff.js')
+
+            await printStuff()
 ```
 
 ### Use env as input
@@ -341,7 +430,7 @@ jobs:
   echo-input:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v4
+      - uses: actions/github-script@v6
         env:
           FIRST_NAME: Mona
           LAST_NAME: Octocat
@@ -369,11 +458,11 @@ jobs:
   apply-label:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v4
+      - uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.MY_PAT }}
           script: |
-            github.issues.addLabels({
+            github.rest.issues.addLabels({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
